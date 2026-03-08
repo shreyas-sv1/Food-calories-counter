@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+*.pth
+*.pkl
+*.h5
+venv/
+.venv/
+node_modules/
+datasets/
+*.log
+.DS_Store
