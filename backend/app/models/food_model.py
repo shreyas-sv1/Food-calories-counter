@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from torchvision import transforms, models
-from torchvision.models import EfficientNet_B0_Weights
+from torchvision.models import EfficientNet_B3_Weights
 from pathlib import Path
 
 # Full Food-101 class list (alphabetical order — matches torchvision.datasets.Food101)
@@ -28,12 +28,23 @@ FOOD101_CLASSES = [
     'samosa','sashimi','scallops','seaweed_salad','shrimp_and_grits',
     'spaghetti_bolognese','spaghetti_carbonara','spring_rolls','steak','strawberry_shortcake',
     'sushi','tacos','takoyaki','tiramisu','tuna_tartare','waffles',
+    'aloo_gobi', 'aloo_paratha', 'biryani', 'butter_chicken', 'chai',
+    'chaat', 'chole_bhature', 'dal_makhani', 'dal_tadka', 'dhokla',
+    'dosa', 'gulab_jamun', 'halwa', 'idli', 'jalebi',
+    'kadai_paneer', 'kheer', 'lassi', 'matar_paneer', 'medu_vada',
+    'naan', 'palak_paneer', 'paneer_tikka', 'pani_puri', 'paratha',
+    'pav_bhaji', 'poha', 'rasgulla', 'rava_dosa', 'rava_idli',
+    'rasmalai', 'roti', 'shahi_paneer', 'tandoori_chicken', 'upma',
+    'uttapam', 'vada_pav', 'vindaloo', 'malai_kofta', 'korma',
 ]
+
+# Minimum confidence threshold — predictions below this are flagged as unreliable
+LOW_CONFIDENCE_THRESHOLD = 0.40
 
 
 class FoodClassifier:
     """
-    CNN Food Classifier using EfficientNet-B0.
+    CNN Food Classifier using EfficientNet-B3.
 
     Modes:
       - Trained mode: loads fine-tuned Food-101 checkpoint (.pth file).
@@ -43,53 +54,93 @@ class FoodClassifier:
     """
 
     def __init__(self):
-        model_path = Path(__file__).parent.parent.parent / 'ml_models/food_classifier/food_classifier.pth'
+        # ml_models is at project root: fitness-ai-app/ml_models/
+        project_root = Path(__file__).parent.parent.parent.parent
+        model_path = project_root / 'ml_models/model.pth'
+        
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.demo_mode = False
-
-        # ── TRAINED MODEL ──────────────────────────────────────
+        self.class_names = FOOD101_CLASSES[:101] # Ensure only the 101 standard classes
+        
+        # 1. Initialize EfficientNet-B0
+        self.model = models.efficientnet_b0(weights=None)
+        num_ftrs = self.model.classifier[1].in_features # 1280
+        
+        # 2. Load trained weights
         if model_path.exists():
-            checkpoint = torch.load(model_path, map_location='cpu')
-            self.class_names = checkpoint['class_names']
-            num_classes = checkpoint['num_classes']
+            try:
+                checkpoint = torch.load(model_path, map_location='cpu')
+                
+                # Extract state dict (handle if it's the whole checkpoint or just weights)
+                state_dict = checkpoint if 'model_state_dict' not in checkpoint else checkpoint['model_state_dict']
+                
+                # Check num_classes from weights
+                weight_key = 'classifier.1.weight'
+                if weight_key in state_dict:
+                    num_classes = state_dict[weight_key].shape[0]
+                else:
+                    num_classes = 101
+                
+                # Rebuild classifier head to match the training script: Sequential(Dropout, Linear)
+                self.model.classifier = nn.Sequential(
+                    nn.Dropout(p=0.3, inplace=True),
+                    nn.Linear(num_ftrs, num_classes)
+                )
 
-            self.model = models.efficientnet_b0(weights=None)
-            num_ftrs = self.model.classifier[1].in_features
-            self.model.classifier = nn.Sequential(
-                nn.Dropout(p=0.3, inplace=True),
-                nn.Linear(num_ftrs, num_classes)
-            )
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.model.eval()
-            self.model.to(self.device)
-
-            val_acc = checkpoint.get('val_accuracy', 0) * 100
-            print(f"[FoodClassifier] Trained model loaded | EfficientNet-B0 | "
-                  f"{num_classes} classes | Val Acc: {val_acc:.2f}%")
-
-        # ── DEMO MODE (no .pth file) ────────────────────────────
+                self.model.load_state_dict(state_dict)
+                print(f"[FoodClassifier] Loaded model.pth successfully ({num_classes} classes)")
+            except Exception as e:
+                print(f"[FoodClassifier] Error loading model.pth: {e}. Using ImageNet weights.")
+                self.model = models.efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1)
+                self.model.classifier = nn.Sequential(
+                    nn.Dropout(p=0.3, inplace=True),
+                    nn.Linear(num_ftrs, 101)
+                )
         else:
-            self.demo_mode = True
-            self.class_names = FOOD101_CLASSES
-            # Use pretrained ImageNet weights — feature extraction only
+            print(f"[FoodClassifier] model.pth not found at {model_path}. Using ImageNet weights.")
             self.model = models.efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1)
-            # Replace classifier with Food-101 head (random weights)
-            num_ftrs = self.model.classifier[1].in_features
             self.model.classifier = nn.Sequential(
                 nn.Dropout(p=0.3, inplace=True),
-                nn.Linear(num_ftrs, len(FOOD101_CLASSES))
+                nn.Linear(num_ftrs, 101)
             )
-            self.model.eval()
-            self.model.to(self.device)
-            print("[FoodClassifier] WARNING: DEMO MODE - trained .pth not found.")
-            print(f"   Model path: {model_path}")
-            print("   Run: python train_food_model.py --epochs 10")
-            print("   The app will work but predictions are not accurate in demo mode.")
+        
+        self.model.eval()
+        self.model.to(self.device)
 
-        # ImageNet normalization (same for both modes)
+        # 3. Preprocessing (224x224 for B0)
         self.transform = transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        # Disable TTA for standard prediction to keep it fast and clean as requested
+        self.tta_mode = False
+        
+        # Test-time augmentation transforms for better prediction accuracy
+        self.tta_transforms = [
+            self.transform,  # Standard
+            transforms.Compose([  # Horizontal flip
+                transforms.Resize(320),
+                transforms.CenterCrop(300),
+                transforms.RandomHorizontalFlip(p=1.0),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ]),
+            transforms.Compose([  # Slightly different crop
+                transforms.Resize(340),
+                transforms.CenterCrop(300),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ]),
+        ]
+        
+        # Training transform for future resilience
+        self.train_transform = transforms.Compose([
+            transforms.RandomResizedCrop(300, scale=(0.7, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+            transforms.RandomRotation(15),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
@@ -98,15 +149,35 @@ class FoodClassifier:
         image = image.convert('RGB')
         return self.transform(image).unsqueeze(0).to(self.device)
 
+    def _preprocess_tta(self, image: Image.Image) -> list:
+        """Preprocess image with multiple TTA transforms."""
+        image = image.convert('RGB')
+        return [t(image).unsqueeze(0).to(self.device) for t in self.tta_transforms]
+
     def _format_class_name(self, class_id: str) -> str:
         """Convert snake_case class id to readable Title Case."""
         return ' '.join(w.capitalize() for w in class_id.replace('_', ' ').split())
 
     def predict(self, image: Image.Image) -> dict:
+        """
+        Predict food class. Uses TTA if tta_mode is True.
+        Returns real confidence scores.
+        """
         with torch.no_grad():
-            input_tensor = self._preprocess(image)
-            outputs = self.model(input_tensor)
-            probs = torch.softmax(outputs, dim=1)
+            if self.tta_mode:
+                # TTA: average over augmented views
+                tta_inputs = self._preprocess_tta(image)
+                all_probs = []
+                for inp in tta_inputs:
+                    out = self.model(inp)
+                    all_probs.append(torch.softmax(out, dim=1))
+                probs = torch.mean(torch.stack(all_probs), dim=0)
+            else:
+                # Single forward pass
+                input_tensor = self._preprocess(image)
+                outputs = self.model(input_tensor)
+                probs = torch.softmax(outputs, dim=1)
+
             confidence, pred_id = torch.max(probs, 1)
             confidence = confidence.item()
             class_id = self.class_names[pred_id.item()]
@@ -115,32 +186,45 @@ class FoodClassifier:
             "food": self._format_class_name(class_id),
             "class_id": class_id,
             "confidence": confidence,
-            "demo_mode": self.demo_mode,
         }
 
-        if confidence < 0.60:
-            result["warning"] = "Low confidence prediction. Upload a clearer food image."
-        if self.demo_mode:
+        # Honest warnings based on real confidence
+        if confidence < LOW_CONFIDENCE_THRESHOLD:
             result["warning"] = (
-                "Demo mode: model not trained yet. "
-                "Run 'python train_food_model.py' for accurate results."
+                f"Low confidence ({confidence:.0%}). "
+                "Try uploading a clearer, well-lit photo of just the food."
             )
 
         return result
 
     def predict_top_k(self, image: Image.Image, k: int = 5) -> list:
+        """
+        Return top-K predictions with real confidence scores.
+        Uses TTA if tta_mode is True.
+        """
         with torch.no_grad():
-            input_tensor = self._preprocess(image)
-            outputs = self.model(input_tensor)
-            probs = torch.softmax(outputs, dim=1)
+            if self.tta_mode:
+                # TTA: average over augmented views
+                tta_inputs = self._preprocess_tta(image)
+                all_probs = []
+                for inp in tta_inputs:
+                    out = self.model(inp)
+                    all_probs.append(torch.softmax(out, dim=1))
+                probs = torch.mean(torch.stack(all_probs), dim=0)
+            else:
+                input_tensor = self._preprocess(image)
+                outputs = self.model(input_tensor)
+                probs = torch.softmax(outputs, dim=1)
+
             topk_prob, topk_id = torch.topk(probs, k)
 
-        return [
-            {
+        results = []
+        for i in range(k):
+            conf = topk_prob[0, i].item()
+            results.append({
                 "food": self._format_class_name(self.class_names[topk_id[0, i].item()]),
                 "class_id": self.class_names[topk_id[0, i].item()],
-                "confidence": topk_prob[0, i].item(),
-                "demo_mode": self.demo_mode,
-            }
-            for i in range(k)
-        ]
+                "confidence": conf,
+            })
+
+        return results

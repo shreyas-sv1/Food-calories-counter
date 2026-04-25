@@ -21,7 +21,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
+from torchvision.models import efficientnet_b3, EfficientNet_B3_Weights
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,20 +31,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--epochs",
         type=int,
-        default=10,
-        help="Total number of training epochs (default: 10).",
+        default=20,
+        help="Total number of training epochs (default: 20).",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=32,
-        help="Mini-batch size for training and validation (default: 32).",
+        default=16,
+        help="Mini-batch size for training and validation (default: 16).",
     )
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-3,
-        help="Initial learning rate for AdamW optimizer (default: 1e-3).",
+        default=3e-4,
+        help="Initial learning rate for AdamW optimizer (default: 3e-4).",
     )
     parser.add_argument(
         "--output-dir",
@@ -83,16 +83,17 @@ def build_transforms() -> dict:
     imagenet_std = [0.229, 0.224, 0.225]
 
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+        transforms.RandomResizedCrop(300, scale=(0.7, 1.0)),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+        transforms.RandomRotation(15),
         transforms.ToTensor(),
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std),
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
+        transforms.Resize(320),
+        transforms.CenterCrop(300),
         transforms.ToTensor(),
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std),
     ])
@@ -145,16 +146,20 @@ def build_dataloaders(
 
 
 def build_model(num_classes: int, device: torch.device) -> nn.Module:
-    """Load EfficientNetB0 with ImageNet weights and replace classifier head."""
-    print("Building EfficientNetB0 model with pretrained ImageNet weights ...")
+    """Load EfficientNetB3 with ImageNet weights and replace classifier head."""
+    print("Building EfficientNetB3 model with pretrained ImageNet weights ...")
 
-    model = efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1)
+    model = efficientnet_b3(weights=EfficientNet_B3_Weights.IMAGENET1K_V1)
 
-    # Replace the classifier head for Food-101 (101 classes)
+    # Replace the classifier head with a stronger one
     in_features = model.classifier[1].in_features
     model.classifier = nn.Sequential(
+        nn.Dropout(p=0.4, inplace=True),
+        nn.Linear(in_features, 512),
+        nn.SiLU(),
+        nn.BatchNorm1d(512),
         nn.Dropout(p=0.3, inplace=True),
-        nn.Linear(in_features, num_classes),
+        nn.Linear(512, num_classes),
     )
 
     model = model.to(device)
@@ -259,14 +264,16 @@ def save_checkpoint(
 ) -> str:
     """Save a training checkpoint to disk."""
     os.makedirs(output_dir, exist_ok=True)
-    checkpoint_path = os.path.join(output_dir, "food_classifier_efficientnetb0.pth")
+    checkpoint_path = os.path.join(output_dir, "food_classifier.pth")
 
     checkpoint = {
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "epoch": epoch,
         "accuracy": accuracy,
+        "val_accuracy": accuracy,
         "class_names": class_names,
+        "num_classes": len(class_names),
     }
     torch.save(checkpoint, checkpoint_path)
     print(f"  Checkpoint saved to {checkpoint_path}")
@@ -319,7 +326,7 @@ def main() -> None:
             unfreeze_backbone(model)
             # Reset optimiser so all parameters use the current LR
             optimizer = optim.AdamW(model.parameters(), lr=args.lr * 0.1, weight_decay=1e-4)
-            scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=args.epochs - args.freeze_epochs, eta_min=1e-6
             )
             print("Backbone unfrozen -- starting end-to-end fine-tuning.\n")

@@ -11,5 +11,7 @@ venv/
 .venv/
 node_modules/
 datasets/
+data/
+.gemini/
 *.log
 .DS_Store
