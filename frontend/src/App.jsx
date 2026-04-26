@@ -8,9 +8,9 @@ import Dashboard from './components/Dashboard'
 
 export default function App() {
   return (
-    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg-primary)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--bg-primary)' }}>
       <Navbar />
-      <main className="flex-1 px-4 sm:px-6 lg:px-8 py-8">
+      <main style={{ flex: 1, padding: '2rem 1rem' }}>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/food" element={<FoodUpload />} />
@@ -29,12 +29,8 @@ export default function App() {
             fontFamily: 'Inter, system-ui, sans-serif',
             fontSize: '14px',
           },
-          success: {
-            iconTheme: { primary: '#10d494', secondary: '#0f1420' },
-          },
-          error: {
-            iconTheme: { primary: '#ef4444', secondary: '#0f1420' },
-          },
+          success: { iconTheme: { primary: '#10d494', secondary: '#0f1420' } },
+          error:   { iconTheme: { primary: '#ef4444', secondary: '#0f1420' } },
         }}
       />
     </div>

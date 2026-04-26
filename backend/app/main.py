@@ -14,14 +14,14 @@ async def lifespan(app: FastAPI):
     try:
         from .database.db import init_db
         init_db()
-        print("✅ Database tables initialized.")
+        print("[OK] Database tables initialized.")
     except Exception as e:
-        print(f"⚠️  Database init skipped: {e}")
+        print(f"[WARN] Database init skipped: {e}")
         print("   App will run without DB persistence.")
-    print("🚀 NutriVision AI backend ready.")
+    print("[START] NutriVision AI backend ready.")
     yield
     # Shutdown
-    print("👋 Shutting down NutriVision AI.")
+    print("[STOP] Shutting down NutriVision AI.")
 
 
 app = FastAPI(
@@ -55,10 +55,10 @@ async def health_check():
 # html=True makes it serve index.html for all unmatched routes (SPA fallback)
 _dist = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
 if os.path.isdir(_dist):
-    print(f"📦 Serving frontend from: {_dist}")
+    print(f"[STATIC] Serving frontend from: {_dist}")
     app.mount("/", StaticFiles(directory=_dist, html=True), name="static")
 else:
-    print(f"⚠️  Frontend dist not found at {_dist} — API-only mode")
+    print(f"[WARN] Frontend dist not found at {_dist} -- API-only mode")
 
     @app.get("/", tags=["health"])
     async def root():
