@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from torchvision import transforms, models
-from torchvision.models import EfficientNet_B3_Weights
+from torchvision.models import EfficientNet_B0_Weights
 from pathlib import Path
 
 # Full Food-101 class list (alphabetical order — matches torchvision.datasets.Food101)
